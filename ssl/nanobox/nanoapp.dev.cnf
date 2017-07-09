@@ -1,0 +1,47 @@
+[ req ]
+default_bits        = 2048
+distinguished_name  = subject
+req_extensions      = req_ext
+x509_extensions     = x509_ext
+string_mask         = utf8only
+
+[ subject ]
+countryName         = Country Name (2 letter code)
+countryName_default = US
+
+stateOrProvinceName = State or Province Name (full name)
+stateOrProvinceName_default = AP
+
+localityName        = Locality Name (eg, city)
+localityName_default = Any Town
+
+organizationName    = Organization Name (eg, company)
+organizationName_default = Your Company Name
+
+commonName          = Common Name (YOUR name)
+commonName_default  = Nanobox Development Server ({DOMAIN})
+
+emailAddress        = Email Address
+emailAddress_default = webmaster@example.com
+
+# used when generating a self-signed certificate
+[ x509_ext ]
+subjectKeyIdentifier = hash
+authorityKeyIdentifier = keyid,issuer
+
+basicConstraints    = CA:TRUE
+keyUsage            = keyCertSign, cRLSign
+nsComment           = "Nanobox Development CA Certificate"
+
+# used when generating a CSR
+[ req_ext ]
+subjectKeyIdentifier = hash
+
+basicConstraints    = CA:FALSE
+keyUsage            = digitalSignature, keyEncipherment
+subjectAltName      = @alternate_names
+nsComment           = "Nanobox Development Server Certificate"
+
+[ alternate_names ]
+DNS.1       = {DOMAIN}
+DNS.2       = *.{DOMAIN}

@@ -1,0 +1,143 @@
+#!/bin/bash
+
+# Find dependencies
+if which nginx >/dev/null
+then
+  echo -n
+else
+  echo "Nginx not found. Install it and try again."
+  exit
+fi
+
+if which openssl >/dev/null
+then
+  echo -n
+else
+  echo "OpenSSL not found. Install it and try again."
+  exit
+fi
+
+# Set paths
+nginx_path="$(dirname $(nginx -V |& sed 's: :\n:g' | grep conf-path | sed 's/.*conf-path=//') 2>/dev/null)"
+ssl_path=/etc/ssl
+
+while [ ! "$(readlink -en "${nginx_path}")" ]
+do
+  read -ep "Nginx configuration path not found; Enter it here: " -i "${nginx_path}" nginx_path
+  nginx_path="$(readlink -en "${nginx_path}")"
+done
+
+while [ ! "$(readlink -en "${ssl_path}")" ]
+do
+  read -ep "SSL configuration path not found; Enter it here: " -i "${ssl_path}" ssl_path
+  ssl_path="$(readlink -en "${ssl_path}")"
+done
+
+# Prepare arguments for use
+self="$(basename "${0}")"
+action="${1}"
+environment="${2}"
+domain="${3}"
+app="$(basename "$(pwd)")"
+
+# Function to print usage statement
+function usage () {
+  cat <<-EOF
+    Usage: ${self} [action] [environment] [domain]
+      actions:
+        add:     add an alias
+        rm:      remove an alias
+
+      environments:
+        local:   manage alias for development environment
+        dry-run: manage alias for dry-run environment
+
+      domain:    domain alias to add for the current app
+EOF
+}
+
+# Function to remove domains from the proxy
+function remove_domain () {
+  # Internal alias
+  nanobox dns rm $environment "${app}.${environment}.nanoapp.dev"
+
+  # $domain alias
+  sudo sed -i "/${domain} \*\.${domain}/d" /etc/hosts
+
+  # Nginx configuration
+  sudo rm "${nginx_path}/nanobox/${domain}"
+
+  # SSL certificate
+  sudo rm "${ssl_path}/nanobox/${domain}.key"
+  sudo rm "${ssl_path}/nanobox/${domain}.crt"
+}
+
+# Process arguments
+case "$domain" in
+  "")
+    echo 'ERROR: No domain specified'
+    usage
+    ;;
+  *)
+    case "$environment" in
+      "local"|"dry-run")
+        case "$action" in
+          "add")
+            sudo -v
+
+            # Internal alias
+            nanobox dns add $environment "${app}.${environment}.nanoapp.dev"
+
+            # $domain alias
+            echo "127.0.0.1       ${domain} *.${domain}" | sudo tee -a /etc/hosts >/dev/null
+
+            # Nginx configuration
+            sudo cp "${nginx_path}/nanobox.app" "${nginx_path}/nanobox/${domain}"
+            sudo sed -i "s/{DOMAIN}/${domain}/g" "${nginx_path}/nanobox/${domain}"
+            sudo sed -i "s/{TARGET}/${app}.${environment}.nanoapp.dev/g" "${nginx_path}/nanobox/${domain}"
+
+            # SSL certificate
+            sed "s/{DOMAIN}/${domain}/g" "${ssl_path}/nanobox/nanoapp.dev.cnf" |
+              sudo openssl req -newkey rsa:2048 \
+              -batch -sha256 -nodes -config /dev/stdin \
+              -keyout "${ssl_path}/nanobox/${domain}.key" \
+              -out "${ssl_path}/nanobox/${domain}.csr"
+            sed "s/{DOMAIN}/${domain}/g" "${ssl_path}/nanobox/nanoapp.dev.cnf" |
+              sudo openssl x509 -req -days 365 -CAcreateserial \
+              -trustout -extfile /dev/stdin -extensions req_ext \
+              -CAkey "${ssl_path}/nanobox/nanoapp-base.key" \
+              -CA "${ssl_path}/nanobox/nanoapp-base.crt" \
+              -in "${ssl_path}/nanobox/${domain}.csr" \
+              -out "${ssl_path}/nanobox/${domain}.crt"
+            sudo rm "${ssl_path}/nanobox/${domain}.csr"
+            cat "${ssl_path}/nanobox/nanoapp-base.crt" | sudo tee -a "${ssl_path}/nanobox/${domain}.crt" >/dev/null
+
+            # Test and reload configuration
+            sudo nginx -t || {
+              remove_domain
+              echo "Failed to set up alias from ${domain} to ${app} (${environment})!"
+              exit
+            }
+            sudo nginx -s reload
+
+            # Complete!
+            echo "Alias established from ${domain} to ${app} (${environment})"
+            ;;
+          "rm")
+            sudo -v
+            remove_domain
+            echo "Alias from ${domain} to ${app} (${environment}) removed"
+            ;;
+          *)
+            echo 'ERROR: Unknown action'
+            usage
+            ;;
+        esac
+        ;;
+      *)
+        echo 'ERROR: Unknown environment'
+        usage
+        ;;
+    esac
+    ;;
+esac
